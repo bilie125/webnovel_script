@@ -1,133 +1,175 @@
 #!/bin/bash
 
-# Обновление системы
-sudo apt update && sudo apt upgrade -y
+# Переменные
+BOT_DIR="/path/to/your/bot"   # Укажите путь к директории с ботом
+VENV_DIR="$BOT_DIR/venv"
+SCRIPT_NAME="your_script.py"  # Укажите имя вашего Python-скрипта
+SERVICE_FILE="/etc/systemd/system/telegram_bot.service"
 
-# Установка Python и pip
-sudo apt install -y python3 python3-pip
+# Создание директории бота
+mkdir -p $BOT_DIR
+cd $BOT_DIR
 
-# Установка необходимых Python библиотек
-pip3 install aiogram requests beautifulsoup4
+# Создание виртуального окружения и установка зависимостей
+python3 -m venv venv
+source $VENV_DIR/bin/activate
+pip install aiogram aiohttp beautifulsoup4
 
-# Создание рабочего каталога
-mkdir -p ~/my_telegram_bot
-cd ~/my_telegram_bot
-
-# Создание файла бота
-cat << EOF > bot.py
+# Сохранение кода бота в файл
+cat <<EOF > $SCRIPT_NAME
 import logging
-import requests
-from bs4 import BeautifulSoup
+import asyncio
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
-import asyncio
+from aiogram.types import Message
+from bs4 import BeautifulSoup
+import aiohttp
+import re
 
-API_TOKEN = '7516735071:AAEvgxMXIEx06sSJ2Aq_YHR8AqYMGP7kL1k'
+API_TOKEN = '7310869040:AAFd8ZMfoUM3tB9H2LMj2cTYzA2rGeVfv7I'
 GROUP_CHAT_ID = '-1002079142065'  # Замените на ID вашей группы
-
-# Включение логирования
-logging.basicConfig(level=logging.INFO)
+CHAT_ID = '6273910889'
+URL_WEBNOVEL = 'https://webnovel.com/book/shadow-slave_22196546206090805/catalog'
+URL_BOOSTY = 'https://boosty.to/shadow_slave'
 
 # Инициализация бота и диспетчера
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
 # В памяти храним последние две главы
-last_chapters = []
+last_chapters_webnovel = []
+sent_chapters_boosty = []
 
-# URL каталога книги
-URL = "https://webnovel.com/book/shadow-slave_22196546206090805/catalog"
+# Включение логирования
+logging.basicConfig(level=logging.INFO)
 
-def get_latest_chapter():
-    """Парсит сайт и возвращает название последней главы."""
+async def fetch_webnovel_chapter():
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
     try:
-        response = requests.get(URL, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        chapter_tag = soup.find('a', class_='ell lst-chapter dib vam')
-        return chapter_tag.text.strip() if chapter_tag else None
-    except requests.RequestException as e:
-        logging.error(f"Ошибка при запросе страницы: {e}")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(URL_WEBNOVEL, headers=headers) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    chapter_tag = soup.find('a', class_='ell lst-chapter dib vam')
+                    return chapter_tag.text.strip() if chapter_tag else None
+                else:
+                    logging.error(f'Ошибка при запросе страницы Webnovel: {response.status}')
+                    return None
+    except Exception as e:
+        logging.error(f'Ошибка при запросе Webnovel: {e}')
         return None
+
+async def fetch_boosty_chapters():
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(URL_BOOSTY) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    chapters = soup.find_all('div', class_='PostSubscriptionBlock_title_WXCN0')
+                    filtered_chapters = [
+                        chapter.get_text(strip=True)
+                        for chapter in chapters
+                        if re.match(r'^Глава \d+: .+$', chapter.get_text(strip=True))
+                    ][:2]
+                    return filtered_chapters
+                else:
+                    logging.error(f'Ошибка при запросе страницы Boosty: {response.status}')
+                    return []
+    except Exception as e:
+        logging.error(f'Ошибка при запросе Boosty: {e}')
+        return []
+
+async def check_new_chapters():
+    latest_chapter_webnovel = await fetch_webnovel_chapter()
+    new_chapters_found = False
+
+    if latest_chapter_webnovel and (not last_chapters_webnovel or latest_chapter_webnovel != last_chapters_webnovel[-1]):
+        last_chapters_webnovel.append(latest_chapter_webnovel)
+        if len(last_chapters_webnovel) > 2:
+            last_chapters_webnovel.pop(0)
+        await bot.send_message(GROUP_CHAT_ID, f"Вышла новая глава на Webnovel: {latest_chapter_webnovel}")
+        new_chapters_found = True
+
+    boosty_chapters = await fetch_boosty_chapters()
+    new_chapters = [chapter for chapter in boosty_chapters if chapter not in sent_chapters_boosty]
+    if new_chapters:
+        sent_chapters_boosty.extend(new_chapters)
+        for chapter in reversed(new_chapters):
+            await bot.send_message(CHAT_ID, chapter)
+        new_chapters_found = True
+
+    return new_chapters_found
+
+async def check_updates():
+    while True:
+        try:
+            logging.info("Периодическая проверка новых глав...")
+            new_chapters_found = await check_new_chapters()
+            if not new_chapters_found:
+                logging.info("Новых глав не найдено.")
+        except Exception as e:
+            logging.error(f"Ошибка при периодической проверке: {e}")
+        await asyncio.sleep(30)  # Опрос каждые 30 секунд
 
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message):
-    await message.reply("Привет! Я бот, который уведомляет о новых главах на Webnovel.")
+    await message.reply("Привет! Я бот, который уведомляет о новых главах на Webnovel и Boosty.")
 
-@dp.message(Command('check'))
-async def check_chapters(message: types.Message):
-    latest_chapter = get_latest_chapter()
-    if not latest_chapter:
-        await message.reply("Не удалось получить последнюю главу.")
-        return
-
-    if latest_chapter in last_chapters:
-        await message.reply("Новых глав нет.")
-    else:
-        last_chapters.append(latest_chapter)
-        if len(last_chapters) > 2:
-            last_chapters.pop(0)
-        await message.reply(f"Вышла новая глава: {latest_chapter}")
-
-@dp.message(Command('last'))
+@dp.message(Command("last"))
 async def last_chapter(message: types.Message):
-    if len(last_chapters) >= 2:
-        await message.reply(f"Последние две главы:\n1. {last_chapters[-2]}\n2. {last_chapters[-1]}")
-    elif len(last_chapters) == 1:
-        await message.reply(f"Последняя глава: {last_chapters[-1]}")
+    webnovel_chapters = "\n".join(last_chapters_webnovel)
+    boosty_chapters = "\n".join(reversed(sent_chapters_boosty[-2:]))
+    
+    response = (
+        f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
+        f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
+    )
+    
+    await message.answer(response, parse_mode='HTML')
+
+@dp.message(Command("check"))
+async def check_chapters(message: Message):
+    new_chapters_found = await check_new_chapters()
+    if not new_chapters_found:
+        # Если новые главы не найдены, отправляем последние главы
+        await last_chapter(message)
     else:
-        await message.reply("Нет данных о главах.")
+        await message.answer("Проверка завершена. Новые главы, если они появились, были отправлены.")
 
-async def check_new_chapter():
-    """Функция для проверки новых глав."""
-    latest_chapter = get_latest_chapter()
-    if latest_chapter:
-        if not last_chapters or latest_chapter != last_chapters[-1]:
-            last_chapters.append(latest_chapter)
-            if len(last_chapters) > 2:
-                last_chapters.pop(0)
-            await bot.send_message(chat_id=GROUP_CHAT_ID, text=f"Вышла новая глава: {latest_chapter}")
-
-async def check_new_chapter_periodically():
-    """Функция для периодической проверки каждые 80 секунд."""
-    while True:
-        await check_new_chapter()
-        await asyncio.sleep(80)  # Опрос каждые 80 секунд
-
-async def main():
-    """Основная функция для запуска бота."""
-    await dp.start_polling(bot)
+async def on_startup():
+    await fetch_boosty_chapters()
+    asyncio.create_task(check_updates())
 
 if __name__ == '__main__':
-    # Запуск бота
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    dp.startup.register(on_startup)
+    dp.run_polling(bot)
 EOF
 
 # Создание файла службы systemd
-cat << EOF | sudo tee /etc/systemd/system/mybot.service
+cat <<EOF > $SERVICE_FILE
 [Unit]
-Description=My Telegram Bot
+Description=Telegram Bot
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/$(whoami)/my_telegram_bot/bot.py
-WorkingDirectory=/home/$(whoami)/my_telegram_bot
-Restart=always
 User=$(whoami)
-Group=$(whoami)
+WorkingDirectory=$BOT_DIR
+ExecStart=$VENV_DIR/bin/python $BOT_DIR/$SCRIPT_NAME
+Restart=always
+RestartSec=10
+Environment="PATH=$VENV_DIR/bin"
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Перезагрузка systemd и запуск службы
+# Перезагрузите конфигурацию systemd, активируйте и запустите службу
 sudo systemctl daemon-reload
-sudo systemctl start mybot.service
-sudo systemctl enable mybot.service
+sudo systemctl enable telegram_bot
+sudo systemctl start telegram_bot
 
-# Проверка статуса службы
-sudo systemctl status mybot.service
+echo "Настройка завершена. Бот должен быть запущен и работать в фоне."
