@@ -1,13 +1,18 @@
 #!/bin/bash
 
 # Переменные
-BOT_DIR="/path/to/your/bot"   # Укажите путь к директории с ботом
+BOT_DIR="/home/ubuntu/telegram_bot"   # Путь к директории бота
 VENV_DIR="$BOT_DIR/venv"
-SCRIPT_NAME="your_script.py"  # Укажите имя вашего Python-скрипта
+SCRIPT_NAME="your_script.py"  # Замените на имя вашего Python-скрипта
 SERVICE_FILE="/etc/systemd/system/telegram_bot.service"
 
-# Создание директории бота
-mkdir -p $BOT_DIR
+# Проверка, существует ли директория, если нет, то создать
+if [ ! -d "$BOT_DIR" ]; then
+    sudo mkdir -p $BOT_DIR
+    sudo chown $USER:$USER $BOT_DIR
+fi
+
+# Переход в директорию бота
 cd $BOT_DIR
 
 # Создание виртуального окружения и установка зависимостей
@@ -150,7 +155,7 @@ if __name__ == '__main__':
 EOF
 
 # Создание файла службы systemd
-cat <<EOF > $SERVICE_FILE
+sudo tee $SERVICE_FILE > /dev/null <<EOF
 [Unit]
 Description=Telegram Bot
 After=network.target
