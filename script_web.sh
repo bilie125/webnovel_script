@@ -31,7 +31,7 @@ from bs4 import BeautifulSoup
 import aiohttp
 import re
 
-API_TOKEN = '7516735071:AAEvgxMXIEx06sSJ2Aq_YHR8AqYMGP7kL1k'
+API_TOKEN = 'token'
 GROUP_CHAT_ID = '-1002079142065'  # Замените на ID вашей группы
 CHAT_ID = '6273910889'
 URL_WEBNOVEL = 'https://webnovel.com/book/shadow-slave_22196546206090805/catalog'
