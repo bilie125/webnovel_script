@@ -146,8 +146,11 @@ async def notify_chats(message_text):
         
         # Проверяем, если сообщение уже было отправлено в этот чат
         if message_text not in sent_messages[chat_id_str]:
-            await bot.send_message(chat_id, message_text)
-            sent_messages[chat_id_str].add(message_text)
+            try:
+                await bot.send_message(chat_id, message_text)
+                sent_messages[chat_id_str].add(message_text)
+            except Exception as e:
+                logging.error(f"Ошибка при отправке сообщения в чат {chat_id}: {e}")
 
 async def on_startup():
     chat_data = load_chat_data()
@@ -195,26 +198,31 @@ async def ban_command(message: Message):
 
 @dp.message()
 async def greet_new_member(message: types.Message):
-    if message.chat.type == 'group':
+    if message.chat.type in ['group', 'supergroup']:
         new_members = message.new_chat_members
-        for member in new_members:
-            webnovel_chapters = "\n".join(last_chapters_webnovel)
-            boosty_chapters = "\n".join(last_chapters_boosty)
+        if new_members is not None:  # Проверяем, что new_members не None
+            for member in new_members:
+                webnovel_chapters = "\n".join(last_chapters_webnovel)
+                boosty_chapters = "\n".join(last_chapters_boosty)
 
-            welcome_text = (
-                f"Добро пожаловать, {member.full_name}. Здесь обсуждается актуальный онгоинг Теневого Раба. "
-                f"Если вы не хотите видеть спойлеры или читаете главы в телеграм канале, то вам сюда: "
-                f"https://t.me/shad0wslave_chat. Актуальные правила чата находятся в закрепленных сообщениях.\n\n"
-                f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
-                f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
-            )
-            await message.reply(welcome_text, parse_mode='HTML')
+                welcome_text = (
+                    f"Добро пожаловать, {member.full_name}. Здесь обсуждается актуальный онгоинг Теневого Раба. "
+                    f"Если вы не хотите видеть спойлеры или читаете главы в телеграм канале, то вам сюда: "
+                    f"https://t.me/shad0wslave_chat. Актуальные правила чата находятся в закрепленных сообщениях.\n\n"
+                    f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
+                    f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
+                )
+                await message.reply(welcome_text, parse_mode='HTML')
 
-        chat_data = load_chat_data()
-        chat_id = str(message.chat.id)
-        if chat_id not in chat_data.get('chats', []):
-            chat_data['chats'].append(chat_id)
-            save_chat_data(chat_data)
+            # Добавляем чат в список, если его нет
+            chat_data = load_chat_data()
+            chat_id = str(message.chat.id)
+            if chat_id not in chat_data.get('chats', []):
+                chat_data['chats'].append(chat_id)
+                save_chat_data(chat_data)
+                logging.info(f'Чат {chat_id} добавлен в файл.')
+        else:
+            logging.warning("Нет новых участников в сообщении.")
 
 def load_chat_data():
     try:
@@ -225,7 +233,7 @@ def load_chat_data():
 
 def save_chat_data(chat_data):
     with open('chat_data.json', 'w') as file:
-        json.dump(chat_data, file)
+        json.dump(chat_data, file, indent=4)
 
 if __name__ == '__main__':
     dp.startup.register(on_startup)
@@ -234,7 +242,7 @@ EOF
 
 cat << 'EOF' > chat_data.json
 {
-  "chats": []
+  "chats": ["-1002079142065", ]
 }
 EOF
 
