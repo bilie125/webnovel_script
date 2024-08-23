@@ -218,11 +218,9 @@ def save_chat_data(data):
     with open('chat_data.json', 'w') as f:
         json.dump(data, f)
 
-if __name__ == "__main__":
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.create_task(on_startup())
-    dp.run_polling(bot, skip_updates=True)
+if __name__ == '__main__':
+    dp.startup.register(on_startup)
+    dp.run_polling(bot))
 EOF
 
 # Создаем файл для хранения данных чатов
