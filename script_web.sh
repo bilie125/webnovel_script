@@ -162,7 +162,11 @@ async def notify_chats(message_text):
         # Проверяем, если сообщение уже было отправлено в этот чат
         if message_text not in sent_messages[chat_id_str]:
             try:
-                await bot.send_message(chat_id, message_text)
+                await bot.send_message(
+                    chat_id, 
+                    message_text, 
+                    disable_web_page_preview=True  # Отключаем предпросмотр ссылок
+                )
                 sent_messages[chat_id_str].add(message_text)
             except Exception as e:
                 logging.error(f"Ошибка при отправке сообщения в чат {chat_id}: {e}")
@@ -176,7 +180,10 @@ async def on_startup():
 
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message):
-    await message.reply("Привет! Я бот, который уведомляет о новых главах на Webnovel и Boosty.")
+    await message.reply(
+        "Привет! Я бот, который уведомляет о новых главах на Webnovel и Boosty.",
+        disable_web_page_preview=True
+    )
 
 @dp.message(Command("last"))
 async def last_chapter(message: types.Message):
@@ -188,7 +195,7 @@ async def last_chapter(message: types.Message):
         f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
     )
 
-    await message.answer(response, parse_mode='HTML')
+    await message.answer(response, parse_mode='HTML', disable_web_page_preview=True)
 
 @dp.message(Command("check"))
 async def check_chapters(message: Message):
@@ -196,7 +203,10 @@ async def check_chapters(message: Message):
     if not new_chapters_found:
         await last_chapter(message)
     else:
-        await message.answer("Проверка завершена. Новые главы, если они появились, были отправлены.")
+        await message.answer(
+            "Проверка завершена. Новые главы, если они появились, были отправлены.",
+            disable_web_page_preview=True
+        )
 
 @dp.message(Command("ban"))
 async def ban_command(message: Message):
@@ -208,7 +218,7 @@ async def ban_command(message: Message):
     else:
         response_text = f"Поняла, начинаю удаление пользователя {user_name} и замену индивида на ИИ... 🤖"
 
-    await message.reply(response_text)
+    await message.reply(response_text, disable_web_page_preview=True)
 
 @dp.message()
 async def greet_new_member(message: types.Message):
@@ -221,12 +231,11 @@ async def greet_new_member(message: types.Message):
 
                 welcome_text = (
                     f"Добро пожаловать, {member.full_name}. Здесь обсуждается актуальный онгоинг Теневого Раба. "
-                    f"Если вы не хотите видеть спойлеры или читаете главы в телеграм канале, то вам сюда: "
-                    f"https://t.me/shad0wslave_chat. Актуальные правила чата находятся в закрепленных сообщениях.\n\n"
-                    f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
-                    f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
+                    f"Если вы не хотите видеть спойлеры или читаете главы в телеграм канале, то вам <a href='https://t.me/shad0wslave_chat'>сюда</a>. "
+                    f"Актуальные <a href='https://t.me/c/2079142065/95762'>правила чата</a> находятся в закрепленных сообщениях.\n\n"
+                    f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"            
                 )
-                await message.reply(welcome_text, parse_mode='HTML')
+                await message.reply(welcome_text, parse_mode='HTML', disable_web_page_preview=True)
 
             # Добавляем чат в список, если его нет
             chat_id = str(message.chat.id)
