@@ -1,19 +1,25 @@
-#!/bin/bash
+# Переменные
+BOT_DIR="/home/ubuntu/telegram_bot"   # Путь к директории бота
+VENV_DIR="$BOT_DIR/venv"
+SCRIPT_NAME="your_script.py"  # Замените на имя вашего Python-скрипта
+SERVICE_FILE="/etc/systemd/system/telegram_bot.service"
 
-# Обновляем и устанавливаем необходимые пакеты
-sudo apt update
-sudo apt upgrade -y
-sudo apt install -y python3 python3-pip
+# Проверка, существует ли директория, если нет, то создать
+if [ ! -d "$BOT_DIR" ]; then
+    sudo mkdir -p $BOT_DIR
+    sudo chown $USER:$USER $BOT_DIR
+fi
 
-# Устанавливаем необходимые Python-библиотеки
-pip3 install aiogram aiohttp beautifulsoup4
+# Переход в директорию бота
+cd $BOT_DIR
 
-# Создаем папку для бота и переходим в нее
-mkdir -p ~/my_telegram_bot
-cd ~/my_telegram_bot
+# Создание виртуального окружения и установка зависимостей
+python3 -m venv venv
+source $VENV_DIR/bin/activate
+pip install aiogram aiohttp beautifulsoup4
 
-# Создаем файл для бота
-cat << 'EOF' > bot.py
+# Сохранение кода бота в файл
+cat <<EOF > $SCRIPT_NAME
 import logging
 import asyncio
 import json
@@ -202,54 +208,57 @@ async def greet_new_member(message: types.Message):
                 f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
                 f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
             )
+            await message.reply(welcome_text, parse_mode='HTML')
 
-            await message.answer(welcome_text, parse_mode='HTML')
+        chat_data = load_chat_data()
+        chat_id = str(message.chat.id)
+        if chat_id not in chat_data.get('chats', []):
+            chat_data['chats'].append(chat_id)
+            save_chat_data(chat_data)
 
-# Загружаем данные чатов
 def load_chat_data():
     try:
-        with open('chat_data.json', 'r') as f:
-            return json.load(f)
+        with open('chat_data.json', 'r') as file:
+            return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"chats": []}
+        return {'chats': []}
 
-# Сохраняем данные чатов
-def save_chat_data(data):
-    with open('chat_data.json', 'w') as f:
-        json.dump(data, f)
+def save_chat_data(chat_data):
+    with open('chat_data.json', 'w') as file:
+        json.dump(chat_data, file)
 
 if __name__ == '__main__':
     dp.startup.register(on_startup)
-    dp.run_polling(bot))
+    dp.run_polling(bot)
 EOF
 
-# Создаем файл для хранения данных чатов
 cat << 'EOF' > chat_data.json
 {
   "chats": []
 }
 EOF
 
-# Создаем сервис для автоматического запуска бота
-sudo bash -c 'cat <<EOF > /etc/systemd/system/telegram_bot.service
+# Создание файла службы systemd
+sudo tee $SERVICE_FILE > /dev/null <<EOF
 [Unit]
 Description=Telegram Bot
 After=network.target
 
 [Service]
-Type=simple
-User=$USER
-WorkingDirectory=/home/$USER/my_telegram_bot
-ExecStart=/usr/bin/python3 /home/$USER/my_telegram_bot/bot.py
+User=$(whoami)
+WorkingDirectory=$BOT_DIR
+ExecStart=$VENV_DIR/bin/python $BOT_DIR/$SCRIPT_NAME
 Restart=always
+RestartSec=10
+Environment="PATH=$VENV_DIR/bin"
 
 [Install]
 WantedBy=multi-user.target
-EOF'
+EOF
 
-# Перезагружаем systemd и запускаем бота
+# Перезагрузите конфигурацию systemd, активируйте и запустите службу
 sudo systemctl daemon-reload
-sudo systemctl start telegram_bot.service
-sudo systemctl enable telegram_bot.service
+sudo systemctl enable telegram_bot
+sudo systemctl start telegram_bot
 
-echo "Установка завершена. Ваш бот теперь работает в фоновом режиме и будет автоматически перезапускаться при перезагрузке сервера."
+echo "Настройка завершена. Бот должен быть запущен и работать в фоне."
