@@ -1,29 +1,22 @@
 #!/bin/bash
 
-# Переменные
-BOT_DIR="/home/ubuntu/telegram_bot"   # Путь к директории бота
-VENV_DIR="$BOT_DIR/venv"
-SCRIPT_NAME="your_script.py"  # Замените на имя вашего Python-скрипта
-SERVICE_FILE="/etc/systemd/system/telegram_bot.service"
+# Обновляем и устанавливаем необходимые пакеты
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y python3 python3-pip
 
-# Проверка, существует ли директория, если нет, то создать
-if [ ! -d "$BOT_DIR" ]; then
-    sudo mkdir -p $BOT_DIR
-    sudo chown $USER:$USER $BOT_DIR
-fi
+# Устанавливаем необходимые Python-библиотеки
+pip3 install aiogram aiohttp beautifulsoup4
 
-# Переход в директорию бота
-cd $BOT_DIR
+# Создаем папку для бота и переходим в нее
+mkdir -p ~/my_telegram_bot
+cd ~/my_telegram_bot
 
-# Создание виртуального окружения и установка зависимостей
-python3 -m venv venv
-source $VENV_DIR/bin/activate
-pip install aiogram aiohttp beautifulsoup4
-
-# Сохранение кода бота в файл
-cat <<EOF > $SCRIPT_NAME
+# Создаем файл для бота
+cat << 'EOF' > bot.py
 import logging
 import asyncio
+import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
@@ -31,9 +24,7 @@ from bs4 import BeautifulSoup
 import aiohttp
 import re
 
-API_TOKEN = 'token'
-GROUP_CHAT_ID = '-1002079142065'  # Замените на ID вашей группы
-CHAT_ID = '6273910889'
+API_TOKEN = '7516735071:AAEvgxMXIEx06sSJ2Aq_YHR8AqYMGP7kL1k'
 URL_WEBNOVEL = 'https://webnovel.com/book/shadow-slave_22196546206090805/catalog'
 URL_BOOSTY = 'https://boosty.to/shadow_slave'
 
@@ -43,7 +34,12 @@ dp = Dispatcher()
 
 # В памяти храним последние две главы
 last_chapters_webnovel = []
-sent_chapters_boosty = []
+last_chapters_boosty = []
+notified_chapters_webnovel = set()
+notified_chapters_boosty = set()
+
+# Храним информацию о том, какие сообщения были отправлены в чаты
+sent_messages = {}  # Ключи: chat_id, Значения: множество отправленных сообщений
 
 # Включение логирования
 logging.basicConfig(level=logging.INFO)
@@ -79,7 +75,7 @@ async def fetch_boosty_chapters():
                         chapter.get_text(strip=True)
                         for chapter in chapters
                         if re.match(r'^Глава \d+: .+$', chapter.get_text(strip=True))
-                    ][:2]
+                    ]
                     return filtered_chapters
                 else:
                     logging.error(f'Ошибка при запросе страницы Boosty: {response.status}')
@@ -89,23 +85,36 @@ async def fetch_boosty_chapters():
         return []
 
 async def check_new_chapters():
+    global last_chapters_webnovel, last_chapters_boosty, notified_chapters_webnovel, notified_chapters_boosty
+
     latest_chapter_webnovel = await fetch_webnovel_chapter()
     new_chapters_found = False
 
+    # Обработка глав Webnovel
     if latest_chapter_webnovel and (not last_chapters_webnovel or latest_chapter_webnovel != last_chapters_webnovel[-1]):
         last_chapters_webnovel.append(latest_chapter_webnovel)
         if len(last_chapters_webnovel) > 2:
             last_chapters_webnovel.pop(0)
-        await bot.send_message(GROUP_CHAT_ID, f"Вышла новая глава на Webnovel: {latest_chapter_webnovel}")
-        new_chapters_found = True
 
+        # Отправляем сообщение, если глава новая
+        if latest_chapter_webnovel not in notified_chapters_webnovel:
+            await notify_chats(f"📖 Вышла новая глава на Webnovel: {latest_chapter_webnovel}")
+            notified_chapters_webnovel.add(latest_chapter_webnovel)
+            new_chapters_found = True
+
+    # Обработка глав Boosty
     boosty_chapters = await fetch_boosty_chapters()
-    new_chapters = [chapter for chapter in boosty_chapters if chapter not in sent_chapters_boosty]
-    if new_chapters:
-        sent_chapters_boosty.extend(new_chapters)
-        for chapter in reversed(new_chapters):
-            await bot.send_message(CHAT_ID, chapter)
-        new_chapters_found = True
+    if boosty_chapters:
+        # Обновляем последние две главы и показываем их в обратном порядке
+        if boosty_chapters and (not last_chapters_boosty or boosty_chapters[0] != last_chapters_boosty[0]):
+            last_chapters_boosty = boosty_chapters[:2]
+            last_chapters_boosty.reverse()  # Инвертируем порядок глав
+
+        for chapter in last_chapters_boosty:
+            if chapter not in notified_chapters_boosty:
+                await notify_chats(f"🚀 Вышла новая глава на Boosty: {chapter}")
+                notified_chapters_boosty.add(chapter)
+                new_chapters_found = True
 
     return new_chapters_found
 
@@ -118,7 +127,29 @@ async def check_updates():
                 logging.info("Новых глав не найдено.")
         except Exception as e:
             logging.error(f"Ошибка при периодической проверке: {e}")
-        await asyncio.sleep(30)  # Опрос каждые 30 секунд
+        await asyncio.sleep(8)  # Опрос каждые 8 секунд
+
+async def notify_chats(message_text):
+    chat_data = load_chat_data()
+    for chat_id in chat_data.get('chats', []):
+        chat_id_str = str(chat_id)
+        
+        # Проверяем, если сообщение уже было отправлено в этот чат
+        if chat_id_str not in sent_messages:
+            sent_messages[chat_id_str] = set()
+        
+        # Проверяем, если сообщение уже было отправлено в этот чат
+        if message_text not in sent_messages[chat_id_str]:
+            await bot.send_message(chat_id, message_text)
+            sent_messages[chat_id_str].add(message_text)
+
+async def on_startup():
+    chat_data = load_chat_data()
+    if chat_data.get('chats'):
+        # Initialize `notified_chapters_boosty` from chat data if needed
+        pass
+
+    asyncio.create_task(check_updates())
 
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message):
@@ -127,54 +158,100 @@ async def send_welcome(message: types.Message):
 @dp.message(Command("last"))
 async def last_chapter(message: types.Message):
     webnovel_chapters = "\n".join(last_chapters_webnovel)
-    boosty_chapters = "\n".join(reversed(sent_chapters_boosty[-2:]))
-    
+    boosty_chapters = "\n".join(last_chapters_boosty)
+
     response = (
         f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
         f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
     )
-    
+
     await message.answer(response, parse_mode='HTML')
 
 @dp.message(Command("check"))
 async def check_chapters(message: Message):
     new_chapters_found = await check_new_chapters()
     if not new_chapters_found:
-        # Если новые главы не найдены, отправляем последние главы
         await last_chapter(message)
     else:
         await message.answer("Проверка завершена. Новые главы, если они появились, были отправлены.")
 
-async def on_startup():
-    await fetch_boosty_chapters()
-    asyncio.create_task(check_updates())
+@dp.message(Command("ban"))
+async def ban_command(message: Message):
+    user_name = message.from_user.username
+    if user_name == 'dupl1citous':
+        response_text = "Все пользователи покинули чат и были заменены на ИИ. 🤖"
+    elif user_name == 'AtLasFP':
+        response_text = "Не получится, главы сами себя не переведут. 📚"
+    else:
+        response_text = f"Поняла, начинаю удаление пользователя {user_name} и замену индивида на ИИ... 🤖"
 
-if __name__ == '__main__':
-    dp.startup.register(on_startup)
-    dp.run_polling(bot)
+    await message.reply(response_text)
+
+@dp.message()
+async def greet_new_member(message: types.Message):
+    if message.chat.type == 'group':
+        new_members = message.new_chat_members
+        for member in new_members:
+            webnovel_chapters = "\n".join(last_chapters_webnovel)
+            boosty_chapters = "\n".join(last_chapters_boosty)
+
+            welcome_text = (
+                f"Добро пожаловать, {member.full_name}. Здесь обсуждается актуальный онгоинг Теневого Раба. "
+                f"Если вы не хотите видеть спойлеры или читаете главы в телеграм канале, то вам сюда: "
+                f"https://t.me/shad0wslave_chat. Актуальные правила чата находятся в закрепленных сообщениях.\n\n"
+                f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
+                f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
+            )
+
+            await message.answer(welcome_text, parse_mode='HTML')
+
+# Загружаем данные чатов
+def load_chat_data():
+    try:
+        with open('chat_data.json', 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"chats": []}
+
+# Сохраняем данные чатов
+def save_chat_data(data):
+    with open('chat_data.json', 'w') as f:
+        json.dump(data, f)
+
+if __name__ == "__main__":
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.create_task(on_startup())
+    dp.run_polling(bot, skip_updates=True)
 EOF
 
-# Создание файла службы systemd
-sudo tee $SERVICE_FILE > /dev/null <<EOF
+# Создаем файл для хранения данных чатов
+cat << 'EOF' > chat_data.json
+{
+  "chats": []
+}
+EOF
+
+# Создаем сервис для автоматического запуска бота
+sudo bash -c 'cat <<EOF > /etc/systemd/system/telegram_bot.service
 [Unit]
 Description=Telegram Bot
 After=network.target
 
 [Service]
-User=$(whoami)
-WorkingDirectory=$BOT_DIR
-ExecStart=$VENV_DIR/bin/python $BOT_DIR/$SCRIPT_NAME
+Type=simple
+User=$USER
+WorkingDirectory=/home/$USER/my_telegram_bot
+ExecStart=/usr/bin/python3 /home/$USER/my_telegram_bot/bot.py
 Restart=always
-RestartSec=10
-Environment="PATH=$VENV_DIR/bin"
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF'
 
-# Перезагрузите конфигурацию systemd, активируйте и запустите службу
+# Перезагружаем systemd и запускаем бота
 sudo systemctl daemon-reload
-sudo systemctl enable telegram_bot
-sudo systemctl start telegram_bot
+sudo systemctl start telegram_bot.service
+sudo systemctl enable telegram_bot.service
 
-echo "Настройка завершена. Бот должен быть запущен и работать в фоне."
+echo "Установка завершена. Ваш бот теперь работает в фоновом режиме и будет автоматически перезапускаться при перезагрузке сервера."
