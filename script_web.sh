@@ -1,25 +1,36 @@
-# Переменные
-BOT_DIR="/home/ubuntu/telegram_bot"   # Путь к директории бота
-VENV_DIR="$BOT_DIR/venv"
-SCRIPT_NAME="your_script.py"  # Замените на имя вашего Python-скрипта
-SERVICE_FILE="/etc/systemd/system/telegram_bot.service"
+#!/bin/bash
 
-# Проверка, существует ли директория, если нет, то создать
-if [ ! -d "$BOT_DIR" ]; then
-    sudo mkdir -p $BOT_DIR
-    sudo chown $USER:$USER $BOT_DIR
-fi
+# Настройки
+BOT_DIR="/opt/shadow_slave_bot"
+VENV_DIR="$BOT_DIR/botenv"
+SERVICE_FILE="/etc/systemd/system/shadow_slave_bot.service"
+BOT_SCRIPT="$BOT_DIR/bot.py"
 
-# Переход в директорию бота
+# Обновление системы
+sudo apt update
+sudo apt upgrade -y
+
+# Установка Python и pip
+sudo apt install -y python3 python3-pip python3-venv
+
+# Создание директории для бота
+sudo mkdir -p $BOT_DIR
+
+# Перемещение в директорию бота
 cd $BOT_DIR
 
-# Создание виртуального окружения и установка зависимостей
-python3 -m venv venv
-source $VENV_DIR/bin/activate
-pip install aiogram aiohttp beautifulsoup4
+# Создание виртуального окружения
+python3 -m venv botenv
 
-# Сохранение кода бота в файл
-cat <<EOF > $SCRIPT_NAME
+# Активация виртуального окружения и установка зависимостей
+source botenv/bin/activate
+pip install aiogram beautifulsoup4 aiohttp
+
+# Создание файла конфигурации
+echo 'API_TOKEN = "7516735071:AAEvgxMXIEx06sSJ2Aq_YHR8AqYMGP7kL1k"' > config.py
+
+# Создание скрипта бота
+cat << 'EOF' > $BOT_SCRIPT
 import logging
 import asyncio
 import json
@@ -46,6 +57,11 @@ notified_chapters_boosty = set()
 
 # Храним информацию о том, какие сообщения были отправлены в чаты
 sent_messages = {}  # Ключи: chat_id, Значения: множество отправленных сообщений
+
+# Храним chat_id в коде
+chat_data = {
+    'chats': ["-1002079142065",]
+}
 
 # Включение логирования
 logging.basicConfig(level=logging.INFO)
@@ -136,7 +152,6 @@ async def check_updates():
         await asyncio.sleep(8)  # Опрос каждые 8 секунд
 
 async def notify_chats(message_text):
-    chat_data = load_chat_data()
     for chat_id in chat_data.get('chats', []):
         chat_id_str = str(chat_id)
         
@@ -153,7 +168,6 @@ async def notify_chats(message_text):
                 logging.error(f"Ошибка при отправке сообщения в чат {chat_id}: {e}")
 
 async def on_startup():
-    chat_data = load_chat_data()
     if chat_data.get('chats'):
         # Initialize `notified_chapters_boosty` from chat data if needed
         pass
@@ -215,58 +229,37 @@ async def greet_new_member(message: types.Message):
                 await message.reply(welcome_text, parse_mode='HTML')
 
             # Добавляем чат в список, если его нет
-            chat_data = load_chat_data()
             chat_id = str(message.chat.id)
             if chat_id not in chat_data.get('chats', []):
                 chat_data['chats'].append(chat_id)
-                save_chat_data(chat_data)
-                logging.info(f'Чат {chat_id} добавлен в файл.')
+                logging.info(f'Чат {chat_id} добавлен в память.')
         else:
             logging.warning("Нет новых участников в сообщении.")
-
-def load_chat_data():
-    try:
-        with open('chat_data.json', 'r') as file:
-            return json.load(file)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {'chats': []}
-
-def save_chat_data(chat_data):
-    with open('chat_data.json', 'w') as file:
-        json.dump(chat_data, file, indent=4)
 
 if __name__ == '__main__':
     dp.startup.register(on_startup)
     dp.run_polling(bot)
 EOF
 
-cat << 'EOF' > chat_data.json
-{
-  "chats": ["-1002079142065", ]
-}
-EOF
-
-# Создание файла службы systemd
-sudo tee $SERVICE_FILE > /dev/null <<EOF
+# Создание системного сервиса
+sudo bash -c "cat << EOF > $SERVICE_FILE
 [Unit]
-Description=Telegram Bot
+Description=Shadow Slave Bot
 After=network.target
 
 [Service]
-User=$(whoami)
+User=$USER
 WorkingDirectory=$BOT_DIR
-ExecStart=$VENV_DIR/bin/python $BOT_DIR/$SCRIPT_NAME
+ExecStart=$VENV_DIR/bin/python $BOT_SCRIPT
 Restart=always
-RestartSec=10
-Environment="PATH=$VENV_DIR/bin"
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF"
 
-# Перезагрузите конфигурацию systemd, активируйте и запустите службу
+# Перезагрузка конфигурации systemd и запуск сервиса
 sudo systemctl daemon-reload
-sudo systemctl enable telegram_bot
-sudo systemctl start telegram_bot
+sudo systemctl start shadow_slave_bot
+sudo systemctl enable shadow_slave_bot
 
-echo "Настройка завершена. Бот должен быть запущен и работать в фоне."
+echo "Установка завершена. Бот запущен и настроен как системный сервис."
