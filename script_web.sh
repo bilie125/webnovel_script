@@ -41,7 +41,7 @@ from bs4 import BeautifulSoup
 import aiohttp
 import re
 
-API_TOKEN = '7516735071:AAEvgxMXIEx06sSJ2Aq_YHR8AqYMGP7kL1k'
+API_TOKEN = '7310869040:AAFd8ZMfoUM3tB9H2LMj2cTYzA2rGeVfv7I'
 URL_WEBNOVEL = 'https://webnovel.com/book/shadow-slave_22196546206090805/catalog'
 URL_BOOSTY = 'https://boosty.to/shadow_slave'
 
@@ -86,9 +86,13 @@ async def fetch_webnovel_chapter():
         return None
 
 async def fetch_boosty_chapters():
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+    }
+    
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(URL_BOOSTY) as response:
+            async with session.get(URL_BOOSTY, headers=headers) as response:
                 if response.status == 200:
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
