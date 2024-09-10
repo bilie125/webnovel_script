@@ -153,7 +153,7 @@ async def check_updates():
                 logging.info("Новых глав не найдено.")
         except Exception as e:
             logging.error(f"Ошибка при периодической проверке: {e}")
-        await asyncio.sleep(5)  # Опрос каждые 8 секунд
+        await asyncio.sleep(8)  # Опрос каждые 8 секунд
 
 async def notify_chats(message_text):
     for chat_id in chat_data.get('chats', []):
