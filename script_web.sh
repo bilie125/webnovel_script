@@ -41,7 +41,7 @@ from bs4 import BeautifulSoup
 import aiohttp
 import re
 
-API_TOKEN = '7310869040:AAFd8ZMfoUM3tB9H2LMj2cTYzA2rGeVfv7I'
+API_TOKEN = '7516735071:AAEvgxMXIEx06sSJ2Aq_YHR8AqYMGP7kL1k'
 URL_WEBNOVEL = 'https://webnovel.com/book/shadow-slave_22196546206090805/catalog'
 URL_BOOSTY = 'https://boosty.to/shadow_slave'
 
