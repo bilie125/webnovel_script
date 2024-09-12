@@ -52,8 +52,10 @@ dp = Dispatcher()
 # В памяти храним последние две главы
 last_chapters_webnovel = []
 last_chapters_boosty = []
+last_english_chapters_boosty = []  # Для хранения глав на английском
 notified_chapters_webnovel = set()
 notified_chapters_boosty = set()
+notified_english_chapters_boosty = set()  # Для уведомления о главах на английском
 
 # Храним информацию о том, какие сообщения были отправлены в чаты
 sent_messages = {}  # Ключи: chat_id, Значения: множество отправленных сообщений
@@ -97,21 +99,32 @@ async def fetch_boosty_chapters():
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     chapters = soup.find_all('div', class_='PostSubscriptionBlock_title_WXCN0')
+
+                    # Фильтр глав на русском языке
                     filtered_chapters = [
                         chapter.get_text(strip=True)
                         for chapter in chapters
                         if re.match(r'^Глава \d+: .+$', chapter.get_text(strip=True))
                     ]
-                    return filtered_chapters
+                    
+                    # Фильтр глав на английском
+                    english_chapters = [
+                        chapter.get_text(strip=True)
+                        for chapter in chapters
+                        if re.match(r'^\d+(-\d+)? на английском$', chapter.get_text(strip=True))
+                    ]
+                    
+                    return filtered_chapters, english_chapters
                 else:
                     logging.error(f'Ошибка при запросе страницы Boosty: {response.status}')
-                    return []
+                    return [], []
     except Exception as e:
         logging.error(f'Ошибка при запросе Boosty: {e}')
-        return []
+        return [], []
 
 async def check_new_chapters():
-    global last_chapters_webnovel, last_chapters_boosty, notified_chapters_webnovel, notified_chapters_boosty
+    global last_chapters_webnovel, last_chapters_boosty, last_english_chapters_boosty
+    global notified_chapters_webnovel, notified_chapters_boosty, notified_english_chapters_boosty
 
     latest_chapter_webnovel = await fetch_webnovel_chapter()
     new_chapters_found = False
@@ -129,18 +142,29 @@ async def check_new_chapters():
             new_chapters_found = True
 
     # Обработка глав Boosty
-    boosty_chapters = await fetch_boosty_chapters()
-    if boosty_chapters:
-        # Обновляем последние две главы и показываем их в обратном порядке
-        if boosty_chapters and (not last_chapters_boosty or boosty_chapters[0] != last_chapters_boosty[0]):
-            last_chapters_boosty = boosty_chapters[:2]
-            last_chapters_boosty.reverse()  # Инвертируем порядок глав
+    boosty_chapters, english_chapters = await fetch_boosty_chapters()
 
-        for chapter in last_chapters_boosty:
-            if chapter not in notified_chapters_boosty:
-                await notify_chats(f"🚀 Вышла новая глава на Boosty: {chapter}")
-                notified_chapters_boosty.add(chapter)
-                new_chapters_found = True
+    # Обработка русских глав
+    if boosty_chapters and (not last_chapters_boosty or boosty_chapters[0] != last_chapters_boosty[0]):
+        last_chapters_boosty = boosty_chapters[:2]
+        last_chapters_boosty.reverse()  # Инвертируем порядок глав
+
+    for chapter in last_chapters_boosty:
+        if chapter not in notified_chapters_boosty:
+            await notify_chats(f"🚀 Вышла новая глава на Boosty: {chapter}")
+            notified_chapters_boosty.add(chapter)
+            new_chapters_found = True
+
+    # Обработка английских глав
+    if english_chapters and (not last_english_chapters_boosty or english_chapters[0] != last_english_chapters_boosty[0]):
+        last_english_chapters_boosty = english_chapters[:2]
+        last_english_chapters_boosty.reverse()  # Инвертируем порядок глав
+
+    for chapter in last_english_chapters_boosty:
+        if chapter not in notified_english_chapters_boosty:
+            await notify_chats(f"🚀📖 Вышла новая глава на английском на Boosty: {chapter}")
+            notified_english_chapters_boosty.add(chapter)
+            new_chapters_found = True
 
     return new_chapters_found
 
@@ -193,10 +217,12 @@ async def send_welcome(message: types.Message):
 async def last_chapter(message: types.Message):
     webnovel_chapters = "\n".join(last_chapters_webnovel)
     boosty_chapters = "\n".join(last_chapters_boosty)
+    english_chapters = "\n".join(last_english_chapters_boosty)
 
     response = (
         f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"
-        f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}"
+        f"<b>Новые главы на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{boosty_chapters}\n\n"
+        f"<b>Новые главы на английском на <a href='{URL_BOOSTY}'>Boosty</a>:</b>\n{english_chapters}"
     )
 
     await message.answer(response, parse_mode='HTML', disable_web_page_preview=True)
@@ -211,43 +237,6 @@ async def check_chapters(message: Message):
             "Проверка завершена. Новые главы, если они появились, были отправлены.",
             disable_web_page_preview=True
         )
-
-@dp.message(Command("ban"))
-async def ban_command(message: Message):
-    user_name = message.from_user.username
-    if user_name == 'dupl1citous':
-        response_text = "Все пользователи покинули чат и были заменены на ИИ. 🤖"
-    elif user_name == 'AtLasFP':
-        response_text = "Не получится, главы сами себя не переведут. 📚"
-    else:
-        response_text = f"Поняла, начинаю удаление пользователя {user_name} и замену индивида на ИИ... 🤖"
-
-    await message.reply(response_text, disable_web_page_preview=True)
-
-@dp.message()
-async def greet_new_member(message: types.Message):
-    if message.chat.type in ['group', 'supergroup']:
-        new_members = message.new_chat_members
-        if new_members is not None:  # Проверяем, что new_members не None
-            for member in new_members:
-                webnovel_chapters = "\n".join(last_chapters_webnovel)
-                boosty_chapters = "\n".join(last_chapters_boosty)
-
-                welcome_text = (
-                    f"Добро пожаловать, {member.full_name}. Здесь обсуждается актуальный онгоинг Теневого Раба. "
-                    f"Если вы не хотите видеть спойлеры или читаете главы в телеграм канале, то вам <a href='https://t.me/shad0wslave_chat'>сюда</a>. "
-                    f"Актуальные <a href='https://t.me/c/2079142065/95762'>правила чата</a> находятся в закрепленных сообщениях.\n\n"
-                    f"<b>Новые главы на <a href='{URL_WEBNOVEL}'>Webnovel</a>:</b>\n{webnovel_chapters}\n\n"            
-                )
-                await message.reply(welcome_text, parse_mode='HTML', disable_web_page_preview=True)
-
-            # Добавляем чат в список, если его нет
-            chat_id = str(message.chat.id)
-            if chat_id not in chat_data.get('chats', []):
-                chat_data['chats'].append(chat_id)
-                logging.info(f'Чат {chat_id} добавлен в память.')
-        else:
-            logging.warning("Нет новых участников в сообщении.")
 
 if __name__ == '__main__':
     dp.startup.register(on_startup)
