@@ -1,20 +1,29 @@
 #!/bin/bash
 
-# Обновление списка пакетов
-sudo apt update
+# Убедитесь, что скрипт выполняется с правами суперпользователя
+if [[ $EUID -ne 0 ]]; then
+   echo "Этот скрипт должен быть выполнен от имени root." 1>&2
+   exit 1
+fi
 
-# Установка Python и pip
-sudo apt install -y python3 python3-pip
+# Установите необходимые пакеты
+apt update
+apt install -y python3 python3-venv python3-pip git
 
-# Установка необходимых библиотек
-pip3 install aiogram beautifulsoup4 requests EbookLib
+# Создайте директорию для бота и перейдите в неё
+mkdir -p /opt/download_bot
+cd /opt/download_bot
 
-# Создание директории для бота
-mkdir -p ~/telegram_download_bot
-cd ~/telegram_download_bot
+# Создайте виртуальное окружение и активируйте его
+python3 -m venv venv
+source venv/bin/activate
 
-# Создание файла с кодом бота
-cat << EOF > download_bot.py
+# Установите необходимые библиотеки
+pip install aiogram
+pip install ebooklib
+
+# Создайте файл с кодом бота
+cat << 'EOF' > bot.py
 import json
 import os
 import re
@@ -315,33 +324,27 @@ if __name__ == '__main__':
     asyncio.run(main())
 EOF
 
-# Установка прав на выполнение
-chmod +x download_bot.py
-
-# Создание systemd сервиса
-cat << EOF | sudo tee /etc/systemd/system/telegram_download_bot.service
+# Создайте файл сервиса для systemd
+cat << EOF > /etc/systemd/system/download_bot.service
 [Unit]
-Description=Telegram Bot Service
+Description=My Download Telegram Bot
 After=network.target
 
 [Service]
-Type=simple
-User=$USER
-WorkingDirectory=$HOME/telegram_download_bot
-ExecStart=/usr/bin/python3 $HOME/telegram_download_bot/bot.py
-Restart=on-failure
+ExecStart=/opt/my_bot/venv/bin/python /opt/download_bot/bot.py
+WorkingDirectory=/opt/download_bot
+User=ubuntu
+Group=ubuntu
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Перезагрузка systemd для обновления конфигурации сервисов
-sudo systemctl daemon-reload
+# Перезагрузите systemd и запустите службу
+systemctl daemon-reload
+systemctl start download_bot.service
+systemctl enable download_bot.service
 
-# Включение сервиса для автоматического старта
-sudo systemctl enable telegram_download_bot.service
-
-# Запуск сервиса
-sudo systemctl start telegram_download_bot.service
-
-echo "Бот установлен и запущен. Чтобы проверить статус, используйте: sudo systemctl status telegram_download_bot.service"
+echo "Бот установлен и запущен. Проверьте статус службы с помощью 'systemctl status download_bot.service'."
