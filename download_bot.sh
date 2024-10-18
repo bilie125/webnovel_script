@@ -331,7 +331,7 @@ Description=My Download Telegram Bot
 After=network.target
 
 [Service]
-ExecStart=/opt/my_bot/venv/bin/python /opt/download_bot/bot.py
+ExecStart=/opt/download_bot/venv/bin/python /opt/download_bot/bot.py
 WorkingDirectory=/opt/download_bot
 User=ubuntu
 Group=ubuntu
