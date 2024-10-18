@@ -21,6 +21,8 @@ source venv/bin/activate
 # Установите необходимые библиотеки
 pip install aiogram
 pip install ebooklib
+pip install requests
+pip install beautifulsoup4
 
 # Создайте файл с кодом бота
 cat << 'EOF' > bot.py
