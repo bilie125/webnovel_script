@@ -19,13 +19,6 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Установите необходимые библиотеки
-pip install aiogram
-pip install ebooklib
-pip install requests
-pip install beautifulsoup4
-
-# Создайте файл с кодом бота
-cat << 'EOF' > bot.py
 import json
 import os
 import re
@@ -57,7 +50,7 @@ EXCEPTIONS_FILE = 'user_exceptions.json'
 chapter_links = {}
 usage_data = {}
 user_exceptions = {}
-admin_ids = [684795841,6273910889]  # Замените на ваши ID администраторов
+admin_ids = [684795840, 6273910880]  # Замените на ваши ID администраторов
 
 # Функция для загрузки ссылок из файла
 def load_links():
@@ -104,6 +97,23 @@ def get_usage_count(user_id, username):
     elif user_id in usage_data:
         return usage_data[user_id]['count'], usage_data[user_id]['last_used']
     return 0, 0
+
+# Функция для сброса использований пользователя на начало нового дня по GMT 0
+def reset_usage_if_new_day(user_id, username):
+    current_time = time.time()
+    gmt_midnight = int(current_time // 86400) * 86400  # Начало дня GMT 0
+
+    # Проверка, если пользователь использовал сервис в этом дне
+    if username and username in usage_data:
+        if usage_data[username]['last_used'] < gmt_midnight:
+            usage_data[username]['count'] = 0  # Сбрасываем счетчик использований
+            usage_data[username]['last_used'] = current_time
+    elif user_id in usage_data:
+        if usage_data[user_id]['last_used'] < gmt_midnight:
+            usage_data[user_id]['count'] = 0  # Сбрасываем счетчик использований
+            usage_data[user_id]['last_used'] = current_time
+
+    save_usage_data()
 
 # Функция для обновления количества использований
 def update_usage(user_id, username):
@@ -255,64 +265,57 @@ async def get_chapters(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username
 
-    # Проверка на администраторов и исключения
-    if user_id not in admin_ids and not is_user_exception(user_id, username):
-        count, last_used = get_usage_count(user_id, username)
+    count, last_used = get_usage_count(user_id, username)
 
-        # Ограничение на 2 использования в день
+    # Ограничение на 2 использования в день для глав после 989
+    args = message.text.split()[1:]
+    if len(args) < 2:
+        await message.reply("Укажите диапазон глав, например: /get_chapters 1873 1916")
+        return
+    
+    start = int(args[0])
+    end = int(args[1])
+
+    if start > 989:  # Ограничение на запросы для глав после 989
         if count >= 2 and time.time() - last_used < 24 * 3600:
             await message.reply("Вы использовали свои 2 попытки на сегодня. Попробуйте завтра.")
             return
 
-    try:
-        args = message.text.split()[1:]
-        if len(args) < 2:
-            await message.reply("Укажите диапазон глав, например: /get_chapters 1873 1916")
-            return
-        
-        start = int(args[0])
-        end = int(args[1])
+    # Проверка на 80 глав за раз
+    if end - start + 1 > 80:
+        await message.reply("Вы можете запросить не более 80 глав за раз.")
+        return
 
-        # Проверка на администраторов и исключения
-        if user_id not in admin_ids and not is_user_exception(user_id, username):
-            count, last_used = get_usage_count(user_id, username)
+    # Обрабатываем главы в заданном диапазоне
+    relevant_links = {num: link for num, link in chapter_links.items() if start <= num <= end}
+    if not relevant_links:
+        await message.reply("Нет ссылок на главы в указанном диапазоне.")
+        return
 
-            # Ограничение на 80 глав за раз
-            if end - start + 1 > 80:
-                await message.reply("Вы можете запросить не более 80 глав за раз.")
-                return
+    chapters = {}
+    for num in sorted(relevant_links.keys()):
+        link = relevant_links[num]
+        title, content = get_chapter_content(link)
+        if content:
+            chapters[num] = (title, content)
 
-        relevant_links = {num: link for num, link in chapter_links.items() if start <= num <= end}
-        if not relevant_links:
-            await message.reply("Нет ссылок на главы в указанном диапазоне.")
-            return
+    txt_file_name = f'chapters_{start}_to_{end}.txt'
+    with open(txt_file_name, 'w', encoding='utf-8') as file:
+        for num, (title, content) in chapters.items():
+            file.write(f"{title}\n\n{content}\n\n")
 
-        chapters = {}
-        for num in sorted(relevant_links.keys()):
-            link = relevant_links[num]
-            title, content = get_chapter_content(link)
-            if content:
-                chapters[num] = (title, content)
+    await message.answer_document(FSInputFile(txt_file_name))
 
-        txt_file_name = f'chapters_{start}_to_{end}.txt'
-        with open(txt_file_name, 'w', encoding='utf-8') as file:
-            for num, (title, content) in chapters.items():
-                file.write(f"{title}\n\n{content}\n\n")
+    epub_file_name = f'chapters_{start}_to_{end}.epub'
+    create_epub(chapters, epub_file_name)
+    await message.answer_document(FSInputFile(epub_file_name))
 
-        await message.answer_document(FSInputFile(txt_file_name))
+    os.remove(txt_file_name)
+    os.remove(epub_file_name)
 
-        epub_file_name = f'chapters_{start}_to_{end}.epub'
-        create_epub(chapters, epub_file_name)
-        await message.answer_document(FSInputFile(epub_file_name))
+    # Обновляем данные использования
+    update_usage(user_id, username)
 
-        os.remove(txt_file_name)
-        os.remove(epub_file_name)
-
-        # Обновляем данные использования
-        update_usage(user_id, username)
-
-    except Exception as e:
-        await message.reply(f"Произошла ошибка: {e}")
 
 # Запуск бота
 async def main():
@@ -324,6 +327,7 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
 EOF
 
 # Создайте файл сервиса для systemd
