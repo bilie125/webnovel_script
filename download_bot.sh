@@ -19,6 +19,13 @@ python3 -m venv venv
 source venv/bin/activate
 
 # Установите необходимые библиотеки
+pip install aiogram
+pip install ebooklib
+pip install requests
+pip install beautifulsoup4
+
+# Создайте файл с кодом бота
+cat << 'EOF' > bot.py
 import json
 import os
 import re
@@ -36,7 +43,7 @@ from ebooklib import epub
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-TOKEN = '8148182667:AAEi0udksKqScHEtzDlxAbDXRrRpxBCoNus'
+TOKEN = '7310869040:AAFd8ZMfoUM3tB9H2LMj2cTYzA2rGeVfv7I'
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -50,7 +57,7 @@ EXCEPTIONS_FILE = 'user_exceptions.json'
 chapter_links = {}
 usage_data = {}
 user_exceptions = {}
-admin_ids = [684795840, 6273910880]  # Замените на ваши ID администраторов
+admin_ids = [6273910889, 684795841]  # Замените на ваши ID администраторов
 
 # Функция для загрузки ссылок из файла
 def load_links():
@@ -327,7 +334,6 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
 EOF
 
 # Создайте файл сервиса для systemd
@@ -335,7 +341,6 @@ cat << EOF > /etc/systemd/system/download_bot.service
 [Unit]
 Description=My Download Telegram Bot
 After=network.target
-
 [Service]
 ExecStart=/opt/download_bot/venv/bin/python /opt/download_bot/bot.py
 WorkingDirectory=/opt/download_bot
@@ -343,7 +348,6 @@ User=ubuntu
 Group=ubuntu
 Restart=always
 RestartSec=5
-
 [Install]
 WantedBy=multi-user.target
 EOF
