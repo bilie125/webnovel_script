@@ -42,7 +42,7 @@ import aiohttp
 import re
 from datetime import datetime
 
-API_TOKEN = '7310869040:AAFd8ZMfoUM3tB9H2LMj2cTYzA2rGeVfv7I'
+API_TOKEN = '7516735071:AAEvgxMXIEx06sSJ2Aq_YHR8AqYMGP7kL1k'
 URL_WEBNOVEL = 'https://webnovel.com/book/shadow-slave_22196546206090805/catalog'
 URL_BOOSTY = 'https://nonameno.com/proxy2/index.php?proxy2=aHR0cHM6Ly9ib29zdHkudG8vc2hhZG93X3NsYXZl&hl=3ed'
 URL_BOOSTY_TRUE = 'https://boosty.to/shadow_slave'
