@@ -24,230 +24,294 @@ pip install aiogram
 # Создайте файл с кодом бота
 cat << 'EOF' > bot.py
 import asyncio
-import logging
 import json
-from aiogram import Bot, Dispatcher
-from aiogram.types import Message
-from aiogram.filters import Command
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.client.bot import DefaultBotProperties
+import os
+import logging
 from datetime import datetime, timedelta
+from collections import deque
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, ContentType
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
 
 # Конфигурация
-API_TOKEN = "7295106138:AAGUaMjkPqCC-bjRyS_ENKRz0H93wHGY8ds"
-
-# Значения выигрышей и проигрышей
+API_TOKEN = '7295106138:AAGUaMjkPqCC-bjRyS_ENKRz0H93wHGY8ds'
+BASE_BALANCE = 1000
 JACKPOT = 2000
 WIN = 1000
-LOOSE = -100
-RESET_BALANCE = 1000
+LOSS = 200
+LIFE_BALANCE = 2000
+LIFE_PRICE = 1500
+JAIL_DURATION = timedelta(hours=1)
+NEGATIVE_THRESHOLD_DURATION = timedelta(hours=2)
+PLAY_COOLDOWN = timedelta(hours=1)
+USERS_FILE = 'users.json'
+MAX_CONSECUTIVE_MESSAGES = 3
+ADMIN_IDS = [6273910889, 507583454, 6787450546, 684795841, 5055660788, 1408061454, 418190922, 1133387699, 5345361232, 6962389672]
 
-# Ограничения
-COOLDOWN_TIME = timedelta(minutes=30)
-DELETE_TIME = 5
-PRISON_TIME = timedelta(hours=2)
-DATA_FILE = "user_data.json"
-
-# Администраторы
-ADMIN_USERS = {6273910889: "Admin1", 987654321: "Admin2"}  # user_id: name
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 
 # Инициализация бота и диспетчера
-default_properties = DefaultBotProperties(parse_mode="HTML")
-bot = Bot(token=API_TOKEN, session=AiohttpSession(), default=default_properties)
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
-# Хэлпер-функции
-def load_data():
+# Глобальная переменная для данных пользователей.
+# Структура: {"users": {user_id (str): { ... данные пользователя ... }}}
+users = {}
+
+# Эфемерное хранение для отслеживания последовательных сообщений
+user_messages = {}
+
+# Загрузка данных пользователей из файла
+async def load_users():
+    global users
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, 'r', encoding='utf-8') as f:
+                users = json.load(f)
+                if "users" not in users:
+                    users["users"] = {}
+        except Exception as e:
+            logging.error(f"Ошибка загрузки данных пользователей: {e}")
+            users = {"users": {}}
+    else:
+        users = {"users": {}}
+
+# Сохранение данных пользователей в файл
+async def save_users():
     try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError:
-        logging.error("Ошибка чтения данных из файла JSON.")
-        return {}
+        with open(USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(users, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        logging.error(f"Ошибка сохранения данных пользователей: {e}")
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
+# Получение данных пользователя (инициализация, если не существует)
+def get_user(user_id: int) -> dict:
+    uid = str(user_id)
+    if uid not in users["users"]:
+        users["users"][uid] = {
+            "balance": BASE_BALANCE,
+            "last_play": None,
+            "negative_since": None,
+            "in_jail": False,
+            "jail_until": None,
+            "lives": 0,
+            "first_name": "",
+            "last_name": "",
+            "username": ""
+        }
+    return users["users"][uid]
 
-user_data = load_data()
+# Обновление данных пользователя и сохранение
+async def update_user(user_id: int, data: dict):
+    users["users"][str(user_id)] = data
+    await save_users()
 
-def update_balance(user_id, amount, use_ticket=False):
-    if not isinstance(user_id, int) or not isinstance(amount, (int, float)):
-        logging.error("Invalid user_id or amount type")
+# Функция для удаления сообщения (с задержкой или мгновенно)
+async def safe_delete_message(chat_id: int, message_id: int, delay: int = 40, immediate: bool = False):
+    if immediate:
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except TelegramBadRequest:
+            pass
+        except Exception as e:
+            logging.error(f"Ошибка удаления сообщения: {e}")
+    else:
+        await asyncio.sleep(delay)
+        try:
+            await bot.delete_message(chat_id, message_id)
+        except TelegramBadRequest:
+            pass
+        except Exception as e:
+            logging.error(f"Ошибка удаления сообщения: {e}")
+
+# Функция для проверки статуса тюрьмы
+def check_jail_status(user: dict, now: datetime) -> str:
+    if user.get("in_jail"):
+        jail_until = user.get("jail_until")
+        if jail_until:
+            try:
+                jail_until_dt = datetime.fromisoformat(jail_until)
+                if now >= jail_until_dt:
+                    # Освобождаем пользователя из тюрьмы
+                    user["in_jail"] = False
+                    user["balance"] = BASE_BALANCE
+                    user["negative_since"] = None
+                    user["jail_until"] = None
+                    return "Вы освобождены из тюрьмы! Ваш баланс восстановлен."
+                else:
+                    return "Вы находитесь в тюрьме и не можете играть."
+            except (ValueError, TypeError):
+                logging.error(f"Ошибка преобразования даты jail_until: {jail_until}")
+    return ""
+
+# Команда для отображения топ-10 игроков
+@dp.message(Command(commands=["top"]))
+async def show_top_10(message: Message):
+    data = users
+    if "users" not in data or not data["users"]:
+        reply = await message.answer("Список пользователей пуст.")
+        asyncio.create_task(safe_delete_message(message.chat.id, reply.message_id))
         return
 
-    if user_id not in user_data:
-        user_data[user_id] = {"balance": RESET_BALANCE, "last_action": {"🎰": None, "🎯": None, "🎲": None}, "prison_until": None, "tickets": 0}
+    sorted_users = sorted(data["users"].values(), key=lambda x: x["balance"], reverse=True)
+    top_10_text = "🏆 Топ-10 игроков:\n"
+    for idx, user in enumerate(sorted_users[:10], start=1):
+        # Используем полное имя: если есть first_name и last_name, то объединяем их, иначе, если есть username, используем его
+        full_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+        if full_name:
+            name = full_name
+        elif user.get("username"):
+            name = f"@{user['username']}"
+        else:
+            name = "Аноним"
+        top_10_text += f"{idx}. {name} — {user['balance']} баллов\n"
+    reply = await message.answer(top_10_text)
+    asyncio.create_task(safe_delete_message(message.chat.id, reply.message_id))
 
-    user_data[user_id]["balance"] += amount
-    if user_data[user_id]["balance"] < 0:
-        user_data[user_id]["prison_until"] = (datetime.now() + PRISON_TIME).isoformat()
-        user_data[user_id]["balance"] = 0
+# Обработка броска кубика (Dice) с эмодзи 🎰
+@dp.message(F.content_type == ContentType.DICE)
+async def process_dice(message: Message):
+    if message.dice.emoji != '🎰':
+        return
 
+    user = get_user(message.from_user.id)
+    # Обновляем данные о пользователе
+    user["first_name"] = message.from_user.first_name
+    user["last_name"] = message.from_user.last_name if message.from_user.last_name else ""
+    user["username"] = message.from_user.username if message.from_user.username else ""
 
-def get_balance(user_id):
-    return user_data.get(user_id, {}).get("balance", RESET_BALANCE)
+    now = datetime.now()
+    jail_status = check_jail_status(user, now)
+    if jail_status:
+        await message.answer(jail_status)
+        await safe_delete_message(message.chat.id, message.message_id, immediate=True)
+        await update_user(message.from_user.id, user)
+        return
 
-def in_prison(user_id):
-    prison_until = user_data.get(user_id, {}).get("prison_until")
-    if not prison_until:
-        return False
-    if datetime.now() >= datetime.fromisoformat(prison_until):
-        user_data[user_id]["prison_until"] = None
-        return False
-    return True
+    if user.get("last_play") and now - datetime.fromisoformat(user["last_play"]) < PLAY_COOLDOWN:
+        await safe_delete_message(message.chat.id, message.message_id, immediate=True)
+        return
+    user["last_play"] = now.isoformat()
 
-def can_send_sticker(user_id, emoji):
-    if in_prison(user_id):
-        return False
+    dice_value = message.dice.value
+    result_text = ""
+    if dice_value == 64:
+        user["balance"] += JACKPOT
+        result_text = f"💰 {message.from_user.full_name} Джекпот! Вы выиграли {JACKPOT} монет!"
+    elif dice_value in (1, 22, 43):
+        user["balance"] += WIN
+        result_text = f"💵 {message.from_user.full_name} Выигрыш! Вы получили {WIN} монет."
+    else:
+        user["balance"] -= LOSS
+        result_text = f"😞 {message.from_user.full_name} Проигрыш. С вашего счета снято {LOSS} монет."
+        asyncio.create_task(safe_delete_message(message.chat.id, message.message_id))
+    
+    if user["balance"] < 0:
+        if not user.get("negative_since"):
+            user["negative_since"] = now.isoformat()
+        elif now - datetime.fromisoformat(user["negative_since"]) >= NEGATIVE_THRESHOLD_DURATION:
+            if user.get("lives", 0) > 0:
+                user["lives"] -= 1
+                user["balance"] = LIFE_BALANCE
+                user["negative_since"] = None
+                result_text += "\n✅ Жизнь использована, баланс восстановлен, тюрьма предотвращена!"
+            else:
+                user["in_jail"] = True
+                user["jail_until"] = (now + JAIL_DURATION).isoformat()
+                result_text += "\n🚨 Вы отправлены в тюрьму на 1 час за отрицательный баланс!"
 
-    last_action = user_data.get(user_id, {}).get("last_action", {}).get(emoji)
-    if not last_action or datetime.now() - datetime.fromisoformat(last_action) > COOLDOWN_TIME:
+    await update_user(message.from_user.id, user)
+    result_msg = await message.answer(result_text)
+    # Удаляем результат через 40 секунд, если он не содержит символы выигрыша
+    if "💰" not in result_text and "💵" not in result_text:
+        asyncio.create_task(safe_delete_message(result_msg.chat.id, result_msg.message_id))
+
+# Команда для проверки баланса
+@dp.message(Command(commands=["balance"]))
+async def cmd_balance(message: Message):
+    user = get_user(message.from_user.id)
+    balance_msg = f"Ваш текущий баланс: {user['balance']} баллов."
+    msg = await message.answer(balance_msg)
+    asyncio.create_task(safe_delete_message(message.chat.id, message.message_id))
+    asyncio.create_task(safe_delete_message(msg.chat.id, msg.message_id))
+
+# Команда справедливости (justice)
+@dp.message(Command(commands=["justice"]))
+async def justice_handler(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        reply = await message.reply("Эта команда доступна только администраторам!")
+        asyncio.create_task(safe_delete_message(message.chat.id, reply.message_id))
+        return
+
+    if not message.reply_to_message:
+        reply = await message.reply("Эта команда должна быть ответом на сообщение пользователя!")
+        asyncio.create_task(safe_delete_message(message.chat.id, reply.message_id))
+        return
+
+    dice_message = await message.reply_dice(emoji="🎲")
+    dice_value = dice_message.dice.value
+    target_user_name = message.reply_to_message.from_user.full_name
+    if dice_value == 6:
+        result_text = f"Решением районного суда города ОССК {target_user_name} признан невиновным"
+    else:
+        result_text = (f"Решением районного суда города ОССК {target_user_name} признан виновным в нарушении правил чата. "
+                       f"Приговаривается к заключению на срок {dice_value} {get_days_suffix(dice_value)}.")
+    await message.reply(result_text)
+    
+
+# Функция для определения правильного окончания слова "день"
+def get_days_suffix(days):
+    if 11 <= days % 100 <= 19:
+        return "дней"
+    last_digit = days % 10
+    if last_digit == 1:
+        return "день"
+    elif 2 <= last_digit <= 4:
+        return "дня"
+    else:
+        return "дней"
+
+# Команда для покупки жизни
+@dp.message(Command(commands=["buy_life"]))
+async def cmd_buy_life(message: Message):
+    user = get_user(message.from_user.id)
+    if user["balance"] < LIFE_PRICE:
+        response = f"У вас недостаточно баллов для покупки жизни. Стоимость {LIFE_PRICE}"
+    else:
+        user["balance"] -= LIFE_PRICE
+        user["lives"] = user.get("lives", 0) + 1
+        response = "Вы успешно купили жизнь!"
+    await update_user(message.from_user.id, user)
+    msg = await message.answer(response)
+    asyncio.create_task(safe_delete_message(message.chat.id, message.message_id))
+    asyncio.create_task(safe_delete_message(msg.chat.id, msg.message_id))
+
+# Функция для отслеживания последовательных одинаковых сообщений пользователя
+async def track_and_check_user_messages(user_id: int, message_text: str) -> bool:
+    if user_id not in user_messages:
+        user_messages[user_id] = deque(maxlen=MAX_CONSECUTIVE_MESSAGES)
+    user_messages[user_id].append(message_text)
+    if len(user_messages[user_id]) == MAX_CONSECUTIVE_MESSAGES and len(set(user_messages[user_id])) == 1:
         return True
     return False
 
-# Обработчик попадания в тюрьму
-async def handle_prison(user_id, chat_id):
-    prison_until = datetime.fromisoformat(user_data[user_id]["prison_until"])
-    remaining_time = (prison_until - datetime.now()).seconds // 60
-    await send_and_delete_message(chat_id, f"Вы в тюрьме! Осталось ждать {remaining_time} минут.")
+# Универсальный обработчик сообщений (текст, стикеры, анимации, видео, фото)
+@dp.message(F.content_type.in_([ContentType.TEXT, ContentType.STICKER, ContentType.ANIMATION, ContentType.VIDEO, ContentType.PHOTO]))
+async def handle_all_messages(message: Message):
+    content = message.text or message.caption or ''
+    if await track_and_check_user_messages(message.from_user.id, content):
+        await safe_delete_message(message.chat.id, message.message_id, immediate=True)
 
+# Главная функция для запуска бота
+async def main():
+    await load_users()
+    await dp.start_polling(bot)
 
-async def send_and_delete_message(chat_id, text):
-    # Отправка сообщения
-    message = await bot.send_message(chat_id, text)
-    
-    # Асинхронное удаление сообщения через некоторое время
-    asyncio.create_task(delete_message_later(chat_id, message.message_id))
-
-async def delete_message_later(chat_id, message_id):
-    # Задержка перед удалением
-    await asyncio.sleep(DELETE_TIME)
-    await bot.delete_message(chat_id, message_id)
-
-# Обработчики стикеров
-async def handle_dice(message: Message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    user = message.from_user
-    emoji = message.dice.emoji
-
-    if in_prison(user_id):
-        prison_until = datetime.fromisoformat(user_data[user_id]["prison_until"])
-        remaining_time = (prison_until - datetime.now()).seconds // 60
-        await send_and_delete_message(chat_id, f"{user.full_name}, вы в тюрьме! Осталось ждать {remaining_time} минут.")
-        await bot.delete_message(chat_id, message.message_id)
-        return
-
-    if not can_send_sticker(user_id, emoji):
-        await bot.delete_message(chat_id, message.message_id)
-        return
-
-    if emoji == "🎰":
-        dice_value = message.dice.value
-
-        if dice_value == 64:
-            update_balance(user_id, JACKPOT)
-            await bot.send_message(chat_id, f"{user.full_name}, поздравляем! Три семерки! 🎉 Джекпот! Вы получили {JACKPOT} монет.")
-        elif dice_value in [1, 22, 43]:
-            update_balance(user_id, WIN)
-            await bot.send_message(chat_id, f"{user.full_name}, вы выиграли! Вы получили {WIN} монет.")
-        else:
-            update_balance(user_id, LOOSE)
-            await send_and_delete_message(chat_id, f"{user.full_name}, Результат: {dice_value}. Неудача! Вы потеряли {abs(LOOSE)} монет.")
-
-    elif emoji == "🎯":
-        dice_value = message.dice.value
-        if dice_value == 6:
-            update_balance(user_id, WIN)
-            await bot.send_message(chat_id, f"{user.full_name}, точный выстрел! 🎯 Вы получили {WIN} монет.")
-        else:
-            balance = get_balance(user_id)
-            update_balance(user_id, -(balance // 2))
-            await send_and_delete_message(chat_id, f"{user.full_name}, промах! Ваш баланс уменьшен вдвое.")
-
-    elif emoji == "🎲":
-        dice_value = message.dice.value
-        if dice_value in [1, 2, 3]:
-            multiplier = {1: 4, 2: 3, 3: 2}[dice_value]
-            balance = get_balance(user_id)
-            update_balance(user_id, -(balance // multiplier))
-            await send_and_delete_message(chat_id, f"{user.full_name}, результат: {dice_value}. Ваш баланс уменьшен в {multiplier} раза.")
-        else:
-            multiplier = {4: 2, 5: 3, 6: 4}[dice_value]
-            update_balance(user_id, get_balance(user_id) * (multiplier - 1))
-            await bot.send_message(chat_id, f"{user.full_name}, результат: {dice_value}. Ваш баланс увеличен в {multiplier} раза.")
-
-    user_data[user_id]["last_action"][emoji] = datetime.now().isoformat()
-    save_data(user_data)  # Save data after the action
-    await delete_message_later(chat_id, message.message_id)
-
-async def admin_dice_command(message: Message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
-    if user_id not in ADMIN_USERS:
-        await send_and_delete_message(chat_id, "У вас нет прав для выполнения этой команды.")
-        await bot.delete_message(chat_id, message.message_id)
-        return
-
-    dice_message = await bot.send_dice(chat_id, emoji="🎲")
-    dice_value = dice_message.dice.value
-
-    if dice_value == 6:
-        await bot.send_message(chat_id, f"Результат 🎲: виновен.")
-    else:
-        await bot.send_message(chat_id, f"Результат 🎲: невиновен.")
-
-async def check_balance(message: Message):
-    user_id = message.from_user.id
-    balance = get_balance(user_id)
-    await send_and_delete_message(message.chat.id, f"Ваш баланс: {balance} монет.")
-    await delete_message_later(message.chat.id, message.message_id)
-
-async def show_top(message: Message):
-    top_users = sorted(user_data.items(), key=lambda x: x[1]["balance"], reverse=True)[:10]
-    leaderboard = "\n".join([f"{i+1}. {ADMIN_USERS.get(int(user_id), user_id)}: {data['balance']} монет" for i, (user_id, data) in enumerate(top_users)])
-    await send_and_delete_message(message.chat.id, f"<b>Топ 10 пользователей:</b>\n{leaderboard}")
-    await delete_message_later(message.chat.id, message.message_id)
-
-
-
-async def handle_message(message: Message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    
-    if message.text.startswith('/'):
-        # Выполняем команду, если это команда
-        if message.text.startswith('/balance'):
-            await check_balance(message)
-        elif message.text.startswith('/top'):
-            await show_top(message)
-        elif message.text.startswith('/justice'):
-            await admin_dice_command(message)
-
-        # Удаляем команду после выполнения
-        await delete_message_later(chat_id, message.message_id)
-        return  
-
-    if in_prison(user_id):
-        await handle_prison(user_id, chat_id)
-        return
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    user_data = load_data()
-
-    dp.message.register(handle_dice, lambda message: message.dice and message.dice.emoji in ["🎰", "🎯", "🎲"])
-    dp.message.register(check_balance, Command(commands=["balance"]))
-    dp.message.register(show_top, Command(commands=["top"]))
-    dp.message.register(admin_dice_command, Command(commands=["justice"]))
-    dp.message.register(handle_message)
-
-    dp.run_polling(bot)
+if __name__ == '__main__':
+    asyncio.run(main())
 EOF
 
 # Создайте файл сервиса для systemd
