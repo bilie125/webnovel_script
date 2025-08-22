@@ -295,9 +295,9 @@ async def get_chapters(message: types.Message):
                 await message.reply("Вы использовали свои 2 попытки на сегодня. Попробуйте завтра.")
                 return
 
-            # Проверка на 80 глав за раз
-            if end - start + 1 > 80:
-                await message.reply("Вы можете запросить не более 80 глав за раз.")
+            # Проверка на 150 глав за раз
+            if end - start + 1 > 150:
+                await message.reply("Вы можете запросить не более 150 глав за раз.")
                 return
         # Для глав до 989 ограничений нет
     else:
