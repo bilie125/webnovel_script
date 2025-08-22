@@ -36,7 +36,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 
 # Конфигурация
-API_TOKEN = '7295106138:AAF3BIcdrazGtTIbAr3oIn9Rucg1d7LsYbQ'
+API_TOKEN = 'bot_api'
 BASE_BALANCE = 1000
 JACKPOT = 2000
 WIN = 1000
