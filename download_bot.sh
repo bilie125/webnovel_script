@@ -43,7 +43,7 @@ from ebooklib import epub
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-TOKEN = '8148182667:AAEi0udksKqScHEtzDlxAbDXRrRpxBCoNus'
+TOKEN = 'bot_api'
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
