@@ -43,7 +43,7 @@ from ebooklib import epub
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-TOKEN = '7310869040:AAFd8ZMfoUM3tB9H2LMj2cTYzA2rGeVfv7I'
+TOKEN = '8148182667:AAEi0udksKqScHEtzDlxAbDXRrRpxBCoNus'
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -274,26 +274,36 @@ async def get_chapters(message: types.Message):
 
     count, last_used = get_usage_count(user_id, username)
 
-    # Ограничение на 2 использования в день для глав после 989
+    # Проверка, является ли пользователь администратором или привилегированным
+    is_admin_or_privileged = user_id in admin_ids or is_user_exception(user_id, username)
+
+    # Добавляем отладочный вывод для проверки
+    logger.info(f"Пользователь {user_id} (@{username}) {'привилегирован' if is_admin_or_privileged else 'не привилегирован'}")
+
+    # Если пользователь не привилегированный
     args = message.text.split()[1:]
     if len(args) < 2:
         await message.reply("Укажите диапазон глав, например: /get_chapters 1873 1916")
         return
-    
+
     start = int(args[0])
     end = int(args[1])
 
-    if start > 989:  # Ограничение на запросы для глав после 989
-        if count >= 2 and time.time() - last_used < 24 * 3600:
-            await message.reply("Вы использовали свои 2 попытки на сегодня. Попробуйте завтра.")
-            return
+    if not is_admin_or_privileged:  # Ограничения для обычных пользователей
+        if start > 989 or end > 1070:  # Ограничения только для глав после 989
+            if count >= 2 and time.time() - last_used < 24 * 3600:
+                await message.reply("Вы использовали свои 2 попытки на сегодня. Попробуйте завтра.")
+                return
 
-    # Проверка на 80 глав за раз
-    if end - start + 1 > 80:
-        await message.reply("Вы можете запросить не более 80 глав за раз.")
-        return
+            # Проверка на 80 глав за раз
+            if end - start + 1 > 80:
+                await message.reply("Вы можете запросить не более 80 глав за раз.")
+                return
+        # Для глав до 989 ограничений нет
+    else:
+        pass  # Привилегированные пользователи могут запросить любые главы без ограничений
 
-    # Обрабатываем главы в заданном диапазоне
+    # Проверка на наличие глав в указанном диапазоне
     relevant_links = {num: link for num, link in chapter_links.items() if start <= num <= end}
     if not relevant_links:
         await message.reply("Нет ссылок на главы в указанном диапазоне.")
@@ -311,17 +321,18 @@ async def get_chapters(message: types.Message):
         for num, (title, content) in chapters.items():
             file.write(f"{title}\n\n{content}\n\n")
 
-    await message.answer_document(FSInputFile(txt_file_name))
+    await message.answer_document(FSInputFile(txt_file_name), reply_to_message_id=message.message_id)
 
     epub_file_name = f'chapters_{start}_to_{end}.epub'
     create_epub(chapters, epub_file_name)
-    await message.answer_document(FSInputFile(epub_file_name))
+    await message.answer_document(FSInputFile(epub_file_name), reply_to_message_id=message.message_id)
 
     os.remove(txt_file_name)
     os.remove(epub_file_name)
 
-    # Обновляем данные использования
-    update_usage(user_id, username)
+    # Обновляем данные использования для обычных пользователей
+    if not is_admin_or_privileged:
+        update_usage(user_id, username)
 
 
 # Запуск бота
