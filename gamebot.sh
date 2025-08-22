@@ -36,19 +36,20 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 
 # Конфигурация
-API_TOKEN = '7295106138:AAGUaMjkPqCC-bjRyS_ENKRz0H93wHGY8ds'
+API_TOKEN = '7295106138:AAF3BIcdrazGtTIbAr3oIn9Rucg1d7LsYbQ'
 BASE_BALANCE = 1000
 JACKPOT = 2000
 WIN = 1000
 LOSS = 200
 LIFE_BALANCE = 2000
 LIFE_PRICE = 1500
+FORWARDED_CASINO_PENALTY = 1000
 JAIL_DURATION = timedelta(hours=1)
 NEGATIVE_THRESHOLD_DURATION = timedelta(hours=2)
 PLAY_COOLDOWN = timedelta(hours=1)
 USERS_FILE = 'users.json'
 MAX_CONSECUTIVE_MESSAGES = 3
-ADMIN_IDS = [6273910889, 507583454, 6787450546, 684795841, 5055660788, 1408061454, 418190922, 1133387699, 5345361232, 6962389672]
+ADMIN_IDS = [6273910889, 507583454, 6787450546, 684795841, 5055660788, 1408061454, 418190922, 1133387699, 5345361232, 6962389672, 1951350054, 8141866475 ]
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -177,6 +178,15 @@ async def process_dice(message: Message):
     if message.dice.emoji != '🎰':
         return
 
+    # Если сообщение пересланное, не запускаем игру, а добавляем штраф
+    if message.forward_date is not None:
+        user = get_user(message.from_user.id)
+        user["balance"] -= FORWARDED_CASINO_PENALTY
+        await update_user(message.from_user.id, user)
+        await message.answer(f"{message.from_user.full_name}, пересланные стикеры казино запрещены! Вам снято {FORWARDED_CASINO_PENALTY} монет в качестве наказания.")
+        asyncio.create_task(safe_delete_message(message.chat.id, message.message_id, immediate=True))
+        return
+
     user = get_user(message.from_user.id)
     # Обновляем данные о пользователе
     user["first_name"] = message.from_user.first_name
@@ -289,21 +299,36 @@ async def cmd_buy_life(message: Message):
     asyncio.create_task(safe_delete_message(message.chat.id, message.message_id))
     asyncio.create_task(safe_delete_message(msg.chat.id, msg.message_id))
 
-# Функция для отслеживания последовательных одинаковых сообщений пользователя
-async def track_and_check_user_messages(user_id: int, message_text: str) -> bool:
+
+# Новая реализация отслеживания подряд одинаковых сообщений
+def track_and_check_user_messages(user_id: int, message_text: str) -> bool:
     if user_id not in user_messages:
-        user_messages[user_id] = deque(maxlen=MAX_CONSECUTIVE_MESSAGES)
-    user_messages[user_id].append(message_text)
-    if len(user_messages[user_id]) == MAX_CONSECUTIVE_MESSAGES and len(set(user_messages[user_id])) == 1:
-        return True
-    return False
+        user_messages[user_id] = {"last": None, "count": 0}
+    data = user_messages[user_id]
+    if message_text == data["last"]:
+        data["count"] += 1
+    else:
+        data["last"] = message_text
+        data["count"] = 1
+    return data["count"] >= 3
 
 # Универсальный обработчик сообщений (текст, стикеры, анимации, видео, фото)
 @dp.message(F.content_type.in_([ContentType.TEXT, ContentType.STICKER, ContentType.ANIMATION, ContentType.VIDEO, ContentType.PHOTO]))
 async def handle_all_messages(message: Message):
+    # Если сообщение является частью медиагруппы, не учитываем его отдельно
+    if message.media_group_id:
+        return
     content = message.text or message.caption or ''
-    if await track_and_check_user_messages(message.from_user.id, content):
+    if track_and_check_user_messages(message.from_user.id, content):
         await safe_delete_message(message.chat.id, message.message_id, immediate=True)
+
+# Универсальный обработчик для удаления команд, отправленных пользователями
+@dp.message(lambda m: m.text and m.text.startswith('/'))
+async def delete_command_messages(message: Message):
+    # Удаляем команду через 40 секунд
+    await safe_delete_message(message.chat.id, message.message_id, delay=5)
+
+
 
 # Главная функция для запуска бота
 async def main():
